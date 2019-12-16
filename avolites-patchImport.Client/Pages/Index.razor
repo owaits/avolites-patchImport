@@ -1,0 +1,207 @@
+﻿@page "/"
+@using System.IO;
+@using Blazor.FileReader;
+@using Microsoft.AspNetCore.WebUtilities;
+@inject NavigationManager navigationManager;
+@inject HttpClient Http;
+@inject IFileReaderService fileReaderService;
+
+<h5>Capture CSV Import</h5>
+
+@if (!hideConsoleAddress || !string.IsNullOrEmpty(connectionError))
+{
+    <div class="alert alert-@(fixtures != null ? "success" : "primary")">
+
+        <div class="form-group">
+            <label for="ipAddress">Console IP Address:</label>
+            <div class="input-group" id="ipAddress">
+                <input type="text" @bind="consoleAddress" />
+                <button class="btn btn-primary" @onclick="@(()=> Connect())">Connect</button>
+            </div>
+        </div>
+        @if (!string.IsNullOrEmpty(connectionError))
+        {
+            <div class="alert alert-danger">
+                @connectionError
+            </div>
+        }
+    </div>
+}
+
+
+
+
+@if (fixtures != null)
+{
+    <div class="alert alert-@(importer.Patch.Count() > 0 ? "success":"primary")">
+        <label for="reaperFile">Please select the fixture patch CSV to import:</label>
+        <div class="input-group mb-3" id="reaperFile">
+            <input type="file" @ref="@inputTypeFileElement" />
+            <button class="btn btn-primary mb3" @onclick="@ReadFile">Load</button>
+        </div>
+    </div>
+
+    @if (importer.Patch.Count() > 0)
+    {
+        @*<div class="alert alert-@(importError == string.Empty ? "success":"primary")">
+                <label for="reaperFile">Please select the cue list to apply the timecode to:</label>
+                <div class="input-group mb-3">
+                    <select class="form-control" @bind="selectedPlaybackId">
+                        <option value="" selected disabled hidden>--- Choose Cue List ---</option>
+                        @foreach (var playback in playbacks.Where(playback => playback.type == "cueListHandle"))
+                        {
+                            <option value="@playback.titanId">@playback.Legend</option>
+                        }
+                    </select>
+                    <button class="btn btn-primary ml-3" @onclick="@Import">Import</button>
+                </div>
+                @if (!string.IsNullOrEmpty(importError))
+                {
+                    <div class="alert alert-danger">
+                        @importError
+                    </div>
+                }
+            </div>*@
+
+        <button class="btn btn-primary ml-3" @onclick="@Import">Import</button>
+
+
+        <table class="table">
+            <tr>
+                <th>Source Fixture Type</th>
+                <th></th>
+                <th>Target Fixture TYpe</th>
+            </tr>
+            @foreach (var patch in importer.FixtureTypes)
+            {
+                <tr>
+                    <td>@patch.Value.FixtureName @patch.Value.ModeName</td>
+                    <td>-></td>
+                    <td>
+                        <select>
+                            @foreach (var link in patch.Value.Matches)
+                            {
+                                <option>@(link.Manufacturer + " " + link.Model + " " + link.Mode)</option>
+                            }
+                        </select>
+                    </td>
+                </tr>
+            }
+        </table>
+
+        <table class="table">
+            <tr>
+                <th>Fixture Name</th>
+                <th>Mode</th>
+                <th>DMX Address</th>
+            </tr>
+            @foreach (var patch in importer.Patch)
+            {
+                <tr>
+                    <td>@patch.FixtureName</td>
+                    <td>@patch.ModeName</td>
+                    <td>@patch.DMXAddress</td>
+                </tr>
+            }
+        </table>
+    }
+}
+
+@code {
+    ElementReference inputTypeFileElement;
+
+    string consoleAddress = "localhost";
+    bool hideConsoleAddress = false;
+
+    PatchImporter importer = new PatchImporter();
+    Handle[] fixtures = null;
+    int selectedPlaybackId = 0;
+    string connectionError = string.Empty;
+
+    protected string FormatApiRequest(string scriptUrl)
+    {
+        if (consoleAddress.Contains(":"))
+        {
+            return $"http://{consoleAddress}/titan/{scriptUrl}";
+        }
+        else
+        {
+            return $"http://{consoleAddress}:4430/titan/{scriptUrl}";
+        }
+
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var uri = navigationManager.ToAbsoluteUri(navigationManager.Uri); //you can use IURIHelper for older versions
+
+        if (QueryHelpers.ParseQuery(uri.Query).TryGetValue("apiUrl", out var url))
+        {
+            consoleAddress = url;
+            hideConsoleAddress = true;
+        }
+
+        Connect(true);
+    }
+
+    public async Task Connect(bool silent = false)
+    {
+        try
+        {
+            fixtures = await Http.GetJsonAsync<Handle[]>(FormatApiRequest("handles/Playbacks"));
+        }
+        catch (Exception ex)
+        {
+            if (!silent)
+                connectionError = $"Unable to connect to Titan console at address '{consoleAddress}'.";
+        }
+
+        StateHasChanged();
+    }
+
+    public async Task ReadFile()
+    {
+        foreach (var file in await fileReaderService.CreateReference(inputTypeFileElement).EnumerateFilesAsync())
+        {
+            await importer.ReadCSV(await file.OpenReadAsync());
+            await importer.LinkPersonality(Http, FormatApiRequest("script/2/Patch/FindPersonality?query="));
+        }
+    }
+
+    private string importError = null;
+
+    public async Task Import()
+    {
+        try
+        {
+            importer.DoPatch(Http, FormatApiRequest);
+            //foreach (var cue in csvLines)
+            //{
+            //    int cueNumber = int.Parse(cue.Id.Trim('M'));
+
+            //    if (!await Http.GetJsonAsync<bool>(FormatApiRequest($"script/2/Playbacks/DoesCueExist?handle_titanId={selectedPlaybackId}&cueNumber={cueNumber}")))
+            //    {
+            //        await Http.GetAsync(FormatApiRequest($"script/2/Playbacks/AppendOrInsertPlaybackCue?handle_titanId={selectedPlaybackId}&cueNumber={cueNumber}"));
+            //    }
+
+
+            //    await Http.GetAsync(FormatApiRequest($"script/2/Playbacks/SetCueLegend?handle_titanId={selectedPlaybackId}&cueNumber={cueNumber}&newLegend={cue.Name}"));
+            //    await Http.GetAsync(FormatApiRequest($"script/2/Timecode/SetCueTimecodeWithCueNumber?handle_titanId={selectedPlaybackId}&cueNumber={cueNumber}&time={cue.Timecode}"));
+            //}
+            importError = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            importError = ex.Message;
+        }
+    }
+
+    class Handle
+    {
+        public int titanId { get; set; }
+        public string type { get; set; }
+        public string Legend { get; set; }
+
+    }
+}
+
